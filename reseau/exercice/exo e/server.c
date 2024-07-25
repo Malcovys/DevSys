@@ -25,43 +25,43 @@ Produit* trouver_produit_par_nom(Produit* tableau, int taille, const char* nom) 
 }
 
 int chargerBaseDeDonnees(Produit *produits, const char *fichierDonnees, char *messageErreur) {
-  FILE *f = fopen(fichierDonnees, "r");
-  if (f == NULL) {
-    sprintf(messageErreur, "Erreur d'ouverture du fichier de base de données : %s", fichierDonnees);
-    return -1; // Erreur d'ouverture
-  }
-
-  char ligne[100];
-  int i = 0;
-  while (fgets(ligne, sizeof(ligne), f) != NULL) {
-    // Supprimer le caractère de nouvelle ligne
-    ligne[strcspn(ligne, "\n")] = 0;
-
-    // Séparation des champs par virgule
-    char *nom = strtok(ligne, ",");
-    if (nom == NULL) {
-      sprintf(messageErreur, "Ligne invalide dans le fichier de base de données : %s.", ligne);
-      fclose(f);
-      return -2; // Erreur de format de ligne
+    FILE *f = fopen(fichierDonnees, "r");
+    if (f == NULL) {
+        sprintf(messageErreur, "Erreur d'ouverture du fichier de base de données : %s", fichierDonnees);
+        return -1; // Erreur d'ouverture
     }
 
-    char *prixStr = strtok(NULL, ",");
-    if (prixStr == NULL) {
-      sprintf(messageErreur, "Ligne invalide dans le fichier de base de données : %s.", ligne);
-      fclose(f);
-      return -2; // Erreur de format de ligne
+    char ligne[100];
+    int i = 0;
+    while (fgets(ligne, sizeof(ligne), f) != NULL) {
+        // Supprimer le caractère de nouvelle ligne
+        ligne[strcspn(ligne, "\n")] = 0;
+
+        // Séparation des champs par virgule
+        char *nom = strtok(ligne, ",");
+        if (nom == NULL) {
+            sprintf(messageErreur, "Ligne invalide dans le fichier de base de données : %s.", ligne);
+            fclose(f);
+            return -2; // Erreur de format de ligne
+        }
+
+        char *prixStr = strtok(NULL, ",");
+        if (prixStr == NULL) {
+            sprintf(messageErreur, "Ligne invalide dans le fichier de base de données : %s.", ligne);
+            fclose(f);
+            return -2; // Erreur de format de ligne
+        }
+        float prix = atof(prixStr);
+
+        // Stockage des données dans la structure Produit
+        strcpy(produits[i].nom, nom);
+        produits[i].prix = prix;
+
+        i++;
     }
-    float prix = atof(prixStr);
 
-    // Stockage des données dans la structure Produit
-    strcpy(produits[i].nom, nom);
-    produits[i].prix = prix;
-
-    i++;
-  }
-
-  fclose(f);
-  return i; // Nombre de produits chargés
+    fclose(f);
+    return i; // Nombre de produits chargés
 }
 
 int cree_socket_tcp_ip() {
@@ -119,10 +119,11 @@ float traite_commande(Produit *data, int taille, char *produit, char *quantite) 
 }
 
 void traite_connection(int sock, const char *db_path) {
-    int nb;
-    socklen_t longueur;
     char bufferR[BUFFER_SIZE];
     char bufferW[BUFFER_SIZE];
+    int nb_cmds;
+    int nb;
+    socklen_t longueur;
     struct sockaddr_in adresse;
 
     Produit produits_data[100];
@@ -137,19 +138,6 @@ void traite_connection(int sock, const char *db_path) {
     sprintf(bufferW, "IP = %s, Port = %u\n", inet_ntoa(adresse.sin_addr), ntohs(adresse.sin_port));
     printf("Machine distante : %s", bufferW);
 
-    /* Réception de la commande client */ 
-    nb = read(sock, bufferR, BUFFER_SIZE - 1);
-    if (nb < 0) {
-        perror("Erreur de lecture");
-        close(sock);
-        return;
-    }
-    bufferR[nb] = '\0';
-
-    /* Traitement de la commande */
-    char *produit_commande = strtok(bufferR, " "); // récupération du produit commandé
-    char *quantite_commande = strtok(NULL, " "); // récupération de la quantité du produit commandé
-
     // Chargement de la base de données dans la mémoire
     int produit_charger = chargerBaseDeDonnees(produits_data, db_path, messageErreur);
     if (produit_charger < 0) {
@@ -159,18 +147,55 @@ void traite_connection(int sock, const char *db_path) {
         return;
     }
 
-    // Opération pour obtenir le prix de la commande
-    float prix = traite_commande(produits_data, produit_charger, produit_commande, quantite_commande);
-    
-    if (prix < 0) {
-        strcpy(bufferW, "Produit indisponible.");
+    // Réception de la commande client
+    nb = read(sock, bufferR, BUFFER_SIZE - 1);
+    if (nb < 0) {
+        perror("Erreur de lecture");
+        close(sock);
+        return;
+    }
+    bufferR[nb] = '\0';
+
+    // Lire le nombre de commandes
+    char *ptr = strtok(bufferR, " ");
+    if (ptr == NULL) {
+        strcpy(bufferW, "Format de commande invalide.");
         write(sock, bufferW, strlen(bufferW));
         close(sock);
         return;
     }
+    nb_cmds = atoi(ptr);
 
-    // Envoyer le prix de la commande
-    snprintf(bufferW, BUFFER_SIZE, "La commande de %s pour une quantité de %s coûtera %.2f", produit_commande, quantite_commande, prix);
+    // Calcul du prix total des commandes
+    float prix_total = 0.0;
+    char *produit_commande;
+    char *quantite_commande;
+
+    for (int i = 0; i < nb_cmds; i++) {
+        produit_commande = strtok(NULL, " ");
+        quantite_commande = strtok(NULL, " ");
+
+        if (produit_commande == NULL || quantite_commande == NULL) {
+            sprintf(bufferW, "Commande invalide.");
+            write(sock, bufferW, strlen(bufferW));
+            close(sock);
+            return;
+        }
+
+        float prix = traite_commande(produits_data, produit_charger, produit_commande, quantite_commande);
+        
+        if (prix < 0) {
+            sprintf(bufferW, "Produit %s indisponible.", produit_commande);
+            write(sock, bufferW, strlen(bufferW));
+            close(sock);
+            return;
+        }
+
+        prix_total += prix;
+    }
+
+    // Envoyer le prix total au client
+    snprintf(bufferW, BUFFER_SIZE, "Le prix total des commandes est : %.2f", prix_total);
     write(sock, bufferW, strlen(bufferW));
     close(sock);
 }
